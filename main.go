@@ -25,6 +25,7 @@ func StartEchoServer(port string) error {
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
 		conn.Write([]byte(scanner.Text() + "\n"))
