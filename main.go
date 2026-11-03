@@ -18,7 +18,7 @@ func FormatMessage(msg ChatMessage) string {
 	if msg.MessageType == "user" {
 		return fmt.Sprintf("[%v] %v: %v", msg.Timestamp.Format(time.TimeOnly), msg.ClientID, msg.Content)
 	} else if msg.MessageType == "system" {
-		return fmt.Sprintf("[%v] ***%v", msg.Timestamp.Format(time.TimeOnly), msg.Content)
+		return fmt.Sprintf("[%v] *** %v", msg.Timestamp.Format(time.TimeOnly), msg.Content)
 	}
 
 	return ""
