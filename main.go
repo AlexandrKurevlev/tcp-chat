@@ -68,16 +68,32 @@ func GenerateClientID() string {
 	return "<User_" + strconv.Itoa(newId) + ">"
 }
 
+type Request struct {
+	Command  int
+	Response chan any
+}
+
 type Hub struct {
 	clients    map[string]*Client
 	broadcast  chan ChatMessage
 	register   chan *Client
 	unregister chan *Client
+	requests   chan Request
 }
 
 func (h *Hub) Run() {
 	for {
 		select {
+		case req := <-h.requests:
+			if req.Command == 1 {
+				activeClients := make([]string, 0, len(h.clients))
+				for k := range h.clients {
+					activeClients = append(activeClients, k)
+				}
+				req.Response <- activeClients
+			} else if req.Command == 2 {
+				req.Response <- len(h.clients)
+			}
 		case msg := <-h.broadcast:
 			h.BroadcastMessage(msg)
 		case reg := <-h.register:
@@ -99,6 +115,18 @@ func (h *Hub) BroadcastMessage(msg ChatMessage) {
 			fmt.Println(err)
 		}
 	}
+}
+
+func (h *Hub) GetActiveClients() []string {
+	req := Request{Command: 1, Response: make(chan any)}
+	h.requests <- req
+	return (<-req.Response).([]string)
+}
+
+func (h *Hub) GetClientCount() int {
+	req := Request{Command: 2, Response: make(chan any)}
+	h.requests <- req
+	return (<-req.Response).(int)
 }
 
 func main() {
