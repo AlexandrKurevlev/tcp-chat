@@ -38,29 +38,64 @@ type Client struct {
 	JoinTime time.Time
 }
 
-func handleClient(conn net.Conn, clientID string) {
+func handleClient(conn net.Conn, h *Hub) {
 	defer conn.Close()
+
+	client := Client{ID: GenerateClientID(), Conn: conn, JoinTime: time.Now()}
+	h.register <- &client
 
 	_, err := conn.Write([]byte("Connected to localhost.\n"))
 	if err != nil {
 		fmt.Println(err)
+		h.unregister <- &client
 		return
 	}
 
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
-		msg := ParseIncomingMessage(scanner.Text(), clientID)
-		_, err = conn.Write([]byte(FormatMessage(msg) + "\n"))
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
+		msg := ParseIncomingMessage(scanner.Text(), client.ID)
+		h.broadcast <- msg
 	}
+
+	if scanner.Err() != nil {
+		fmt.Println(scanner.Err())
+	}
+	h.unregister <- &client
 }
 
 func GenerateClientID() string {
 	newId := int(lastUserId.Add(1))
 	return "<User_" + strconv.Itoa(newId) + ">"
+}
+
+type Hub struct {
+	clients    map[string]*Client
+	broadcast  chan ChatMessage
+	register   chan *Client
+	unregister chan *Client
+}
+
+func (h *Hub) Run() {
+	for {
+		select {
+		case msg := <-h.broadcast:
+			h.BroadcastMessage(msg)
+		case reg := <-h.register:
+			h.clients[reg.ID] = reg
+		case unreg := <-h.unregister:
+			delete(h.clients, unreg.ID)
+		}
+	}
+}
+
+func (h *Hub) BroadcastMessage(msg ChatMessage) {
+	for _, client := range h.clients {
+		if client.ID == msg.ClientID {
+			continue
+		}
+
+		client.Conn.Write([]byte(FormatMessage(msg) + "\n"))
+	}
 }
 
 func main() {
@@ -71,6 +106,9 @@ func main() {
 }
 
 func StartEchoServer(port string) error {
+	hub := Hub{clients: make(map[string]*Client), broadcast: make(chan ChatMessage), register: make(chan *Client), unregister: make(chan *Client)}
+	go hub.Run()
+
 	listener, err := net.Listen("tcp", port)
 	if err != nil {
 		return err
@@ -85,7 +123,7 @@ func StartEchoServer(port string) error {
 			return err
 		}
 
-		go handleClient(conn, GenerateClientID())
+		go handleClient(conn, &hub)
 	}
 
 	return nil
