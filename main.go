@@ -39,28 +39,10 @@ type Client struct {
 }
 
 func handleClient(conn net.Conn, h *Hub) {
-	defer conn.Close()
+	client := h.setupClientConnection(conn)
+	h.register <- client
 
-	client := Client{ID: GenerateClientID(), Conn: conn, JoinTime: time.Now()}
-	h.register <- &client
-
-	_, err := conn.Write([]byte("Connected to localhost.\n"))
-	if err != nil {
-		fmt.Println(err)
-		h.unregister <- &client
-		return
-	}
-
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		msg := ParseIncomingMessage(scanner.Text(), client.ID)
-		h.broadcast <- msg
-	}
-
-	if scanner.Err() != nil {
-		fmt.Println(scanner.Err())
-	}
-	h.unregister <- &client
+	h.handleClientMessages(client)
 }
 
 func GenerateClientID() string {
@@ -127,6 +109,35 @@ func (h *Hub) GetClientCount() int {
 	req := Request{Command: 2, Response: make(chan any)}
 	h.requests <- req
 	return (<-req.Response).(int)
+}
+
+func (h *Hub) setupClientConnection(conn net.Conn) *Client {
+	client := Client{ID: GenerateClientID(), Conn: conn, JoinTime: time.Now()}
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+
+	conn.Write([]byte("Welcome," + client.ID + "\n"))
+	return &client
+}
+
+func (h *Hub) cleanupClient(client *Client) {
+	defer client.Conn.Close()
+
+	h.unregister <- client
+
+	msg := ChatMessage{Timestamp: time.Now(), Content: client.ID + " has left the chat", MessageType: "system"}
+	h.broadcast <- msg
+}
+
+func (h *Hub) handleClientMessages(client *Client) {
+	defer h.cleanupClient(client)
+
+	scanner := bufio.NewScanner(client.Conn)
+	for scanner.Scan() {
+		msg := ParseIncomingMessage(scanner.Text(), client.ID)
+		h.broadcast <- msg
+
+		client.Conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	}
 }
 
 func main() {
