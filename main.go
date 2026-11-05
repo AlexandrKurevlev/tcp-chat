@@ -38,24 +38,24 @@ type Client struct {
 	JoinTime time.Time
 }
 
-func HandleClient(client *Client) error {
-	defer client.Conn.Close()
+func handleClient(conn net.Conn, clientID string) {
+	defer conn.Close()
 
-	_, err := client.Conn.Write([]byte("Connected to localhost.\n"))
+	_, err := conn.Write([]byte("Connected to localhost.\n"))
 	if err != nil {
-		return err
+		fmt.Println(err)
+		return
 	}
 
-	scanner := bufio.NewScanner(client.Conn)
+	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
-		msg := ParseIncomingMessage(scanner.Text(), client.ID)
-		_, err = client.Conn.Write([]byte(FormatMessage(msg) + "\n"))
+		msg := ParseIncomingMessage(scanner.Text(), clientID)
+		_, err = conn.Write([]byte(FormatMessage(msg) + "\n"))
 		if err != nil {
-			return err
+			fmt.Println(err)
+			return
 		}
 	}
-
-	return nil
 }
 
 func GenerateClientID() string {
@@ -85,11 +85,7 @@ func StartEchoServer(port string) error {
 			return err
 		}
 
-		newClient := Client{ID: GenerateClientID(), Conn: conn, JoinTime: time.Now()}
-		err = HandleClient(&newClient)
-		if err != nil {
-			return nil
-		}
+		go handleClient(conn, GenerateClientID())
 	}
 
 	return nil
