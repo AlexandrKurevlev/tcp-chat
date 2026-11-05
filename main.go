@@ -94,7 +94,10 @@ func (h *Hub) BroadcastMessage(msg ChatMessage) {
 			continue
 		}
 
-		client.Conn.Write([]byte(FormatMessage(msg) + "\n"))
+		_, err := client.Conn.Write([]byte(FormatMessage(msg) + "\n"))
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 }
 
