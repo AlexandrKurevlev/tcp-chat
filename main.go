@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -286,18 +287,47 @@ func setupSignalHandling() chan os.Signal {
 	return c
 }
 
+type ServerConfig struct {
+	Port               string
+	MaxConnections     int
+	LogLevel           string
+	MessageHistorySize int
+}
+
+func parseCommandLineArgs() ServerConfig {
+	port := flag.String("port", "8080", "Server port")
+	maxConnections := flag.Int("max-connections", 1000, "Maximum connections")
+	logLevel := flag.String("log-level", "INFO", "Log level")
+	msgHistorySize := flag.Int("msg-history-size", 50, "Message history size")
+	flag.Parse()
+
+	return ServerConfig{*port, *maxConnections, *logLevel, *msgHistorySize}
+}
+
+func printStartupBanner(config ServerConfig) {
+	fmt.Println("╔══════════════════════════════════════╗")
+	fmt.Println("║         TCP Chat Server              ║")
+	fmt.Println("╚══════════════════════════════════════╝")
+	fmt.Println("Port:", config.Port)
+	fmt.Println("Max Connections:", config.MaxConnections)
+	fmt.Println("Log Level:", config.LogLevel)
+	fmt.Println("Connect using: telnet localhost", config.Port)
+}
+
 func main() {
+	serverCfg := parseCommandLineArgs()
+	printStartupBanner(serverCfg)
 	cfg := &Config{logger: setupLogging(""), serverStats: &ServerStats{}}
 
 	ctx, _ := context.WithCancel(context.Background())
 
-	err := StartEchoServer(ctx, cfg, ":8081")
+	err := StartEchoServer(ctx, cfg, serverCfg)
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-func StartEchoServer(ctx context.Context, cfg *Config, port string) error {
+func StartEchoServer(ctx context.Context, cfg *Config, serverCfg ServerConfig) error {
 	hub := Hub{
 		clients:        make(map[string]*Client),
 		broadcast:      make(chan ChatMessage),
@@ -319,12 +349,12 @@ func StartEchoServer(ctx context.Context, cfg *Config, port string) error {
 		os.Exit(0)
 	}()
 
-	listener, err := net.Listen("tcp", port)
+	listener, err := net.Listen("tcp", ":"+serverCfg.Port)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	cfg.logger.Println("TCP Echo Server listening on " + port)
+	cfg.logger.Println("TCP Echo Server listening on " + ":" + serverCfg.Port)
 	cfg.logger.Println("Waiting for connection...")
 
 	for {
