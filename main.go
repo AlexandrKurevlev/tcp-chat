@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -43,6 +45,9 @@ func handleClient(conn net.Conn, h *Hub) {
 	client := h.setupClientConnection(conn)
 	h.register <- client
 
+	h.cfg.logger.Println("Client " + client.ID + " connected")
+	h.cfg.serverStats.ActiveConnections++
+
 	recentMsgs := h.messageHistory.GetRecent()
 	if len(recentMsgs) > 0 {
 		conn.Write([]byte("--- Recent Messages ---\n"))
@@ -74,6 +79,7 @@ type Hub struct {
 	unregister     chan *Client
 	requests       chan Request
 	messageHistory *MessageHistory
+	cfg            *Config
 }
 
 func (h *Hub) Run() {
@@ -107,7 +113,7 @@ func (h *Hub) BroadcastMessage(msg ChatMessage) {
 
 		_, err := client.Conn.Write([]byte(FormatMessage(msg) + "\n"))
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 		}
 	}
 }
@@ -177,6 +183,9 @@ func (h *Hub) cleanupClient(client *Client) {
 
 	msg := ChatMessage{Timestamp: time.Now(), Content: client.ID + " has left the chat", MessageType: "system"}
 	h.broadcast <- msg
+
+	h.cfg.logger.Println("Cleaning up " + client.ID)
+	h.cfg.serverStats.ActiveConnections--
 }
 
 func (h *Hub) handleClientMessages(client *Client) {
@@ -185,6 +194,7 @@ func (h *Hub) handleClientMessages(client *Client) {
 	scanner := bufio.NewScanner(client.Conn)
 	for scanner.Scan() {
 		msg := ParseIncomingMessage(scanner.Text(), client.ID)
+		h.cfg.serverStats.TotalMessagesProcessed++
 		if strings.HasPrefix(msg.Content, "/") {
 			h.HandleCommand(client, msg.Content)
 		} else {
@@ -231,14 +241,31 @@ func (mh *MessageHistory) GetRecent() []ChatMessage {
 	return res
 }
 
+type ServerStats struct {
+	ActiveConnections      int
+	TotalMessagesProcessed int64
+	UptimeSeconds          int64
+	ErrorCount             int
+}
+
+func setupLogging(level string) *log.Logger {
+	return log.New(os.Stdout, "[TCP-CHAT] ", log.Ldate|log.Ltime)
+}
+
+type Config struct {
+	logger      *log.Logger
+	serverStats *ServerStats
+}
+
 func main() {
-	err := StartEchoServer(":8081")
+	cfg := &Config{logger: setupLogging(""), serverStats: &ServerStats{}}
+	err := StartEchoServer(cfg, ":8081")
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-func StartEchoServer(port string) error {
+func StartEchoServer(cfg *Config, port string) error {
 	hub := Hub{
 		clients:        make(map[string]*Client),
 		broadcast:      make(chan ChatMessage),
@@ -246,6 +273,7 @@ func StartEchoServer(port string) error {
 		unregister:     make(chan *Client),
 		requests:       make(chan Request),
 		messageHistory: NewMessageHistory(),
+		cfg:            cfg,
 	}
 	go hub.Run()
 
@@ -254,8 +282,8 @@ func StartEchoServer(port string) error {
 		return err
 	}
 	defer listener.Close()
-	fmt.Println("TCP Echo Server listening on " + port)
-	fmt.Println("Waiting for connection...")
+	cfg.logger.Println("TCP Echo Server listening on " + port)
+	cfg.logger.Println("Waiting for connection...")
 
 	for {
 		conn, err := listener.Accept()
