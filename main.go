@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -42,6 +43,17 @@ func handleClient(conn net.Conn, h *Hub) {
 	client := h.setupClientConnection(conn)
 	h.register <- client
 
+	recentMsgs := h.messageHistory.GetRecent()
+	if len(recentMsgs) > 0 {
+		conn.Write([]byte("--- Recent Messages ---\n"))
+	}
+	for _, msg := range recentMsgs {
+		conn.Write([]byte(FormatMessage(msg) + "\n"))
+	}
+	if len(recentMsgs) > 0 {
+		conn.Write([]byte("--- End of history ---\n"))
+	}
+
 	h.handleClientMessages(client)
 }
 
@@ -56,11 +68,12 @@ type Request struct {
 }
 
 type Hub struct {
-	clients    map[string]*Client
-	broadcast  chan ChatMessage
-	register   chan *Client
-	unregister chan *Client
-	requests   chan Request
+	clients        map[string]*Client
+	broadcast      chan ChatMessage
+	register       chan *Client
+	unregister     chan *Client
+	requests       chan Request
+	messageHistory *MessageHistory
 }
 
 func (h *Hub) Run() {
@@ -111,6 +124,40 @@ func (h *Hub) GetClientCount() int {
 	return (<-req.Response).(int)
 }
 
+func (h *Hub) SendUserList(client *Client) {
+	clients := h.GetActiveClients()
+	msg := fmt.Sprintf("Online users (%d): %s", len(clients), strings.Join(clients, ", "))
+	client.Conn.Write([]byte(msg + "\n"))
+}
+
+func (h *Hub) SendHelpMessage(client *Client) {
+	client.Conn.Write([]byte(
+		"Available commands:\n" +
+			"/help      - Show this help message\n" +
+			"/users     - List online users\n" +
+			"/time      - Show server time\n" +
+			"/quit      - Disconnect from the chat\n"))
+}
+
+func (h *Hub) SendTimeMessage(client *Client) {
+	client.Conn.Write([]byte("Server time: " + time.Now().Format(time.TimeOnly)))
+}
+
+func (h *Hub) HandleCommand(client *Client, command string) {
+	switch command {
+	case "/users":
+		h.SendUserList(client)
+	case "/help":
+		h.SendHelpMessage(client)
+	case "/time":
+		h.SendTimeMessage(client)
+	case "/quit":
+		h.cleanupClient(client)
+	default:
+		client.Conn.Write([]byte("Unknown command\n"))
+	}
+}
+
 func (h *Hub) setupClientConnection(conn net.Conn) *Client {
 	client := Client{ID: GenerateClientID(), Conn: conn, JoinTime: time.Now()}
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -121,6 +168,10 @@ func (h *Hub) setupClientConnection(conn net.Conn) *Client {
 
 func (h *Hub) cleanupClient(client *Client) {
 	defer client.Conn.Close()
+
+	if _, ok := h.clients[client.ID]; !ok {
+		return
+	}
 
 	h.unregister <- client
 
@@ -134,10 +185,50 @@ func (h *Hub) handleClientMessages(client *Client) {
 	scanner := bufio.NewScanner(client.Conn)
 	for scanner.Scan() {
 		msg := ParseIncomingMessage(scanner.Text(), client.ID)
-		h.broadcast <- msg
+		if strings.HasPrefix(msg.Content, "/") {
+			h.HandleCommand(client, msg.Content)
+		} else {
+			h.messageHistory.Add(msg)
+			h.broadcast <- msg
+		}
 
 		client.Conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	}
+}
+
+const defaultMessageHistorySize = 50
+
+type MessageHistory struct {
+	messages []ChatMessage
+	head     int
+}
+
+func NewMessageHistory() *MessageHistory {
+	return &MessageHistory{messages: make([]ChatMessage, 0, defaultMessageHistorySize), head: 0}
+}
+
+func (mh *MessageHistory) Add(msg ChatMessage) {
+	if len(mh.messages) < defaultMessageHistorySize {
+		mh.messages = append(mh.messages, msg)
+	} else {
+		mh.messages[mh.head] = msg
+	}
+
+	mh.head = (mh.head + 1) % defaultMessageHistorySize
+}
+
+func (mh *MessageHistory) GetRecent() []ChatMessage {
+	res := make([]ChatMessage, 0, len(mh.messages))
+	if len(mh.messages) < defaultMessageHistorySize {
+		for _, msg := range mh.messages {
+			res = append(res, msg)
+		}
+	} else {
+		for i := range defaultMessageHistorySize {
+			res = append(res, mh.messages[(mh.head+i)%defaultMessageHistorySize])
+		}
+	}
+	return res
 }
 
 func main() {
@@ -148,7 +239,14 @@ func main() {
 }
 
 func StartEchoServer(port string) error {
-	hub := Hub{clients: make(map[string]*Client), broadcast: make(chan ChatMessage), register: make(chan *Client), unregister: make(chan *Client)}
+	hub := Hub{
+		clients:        make(map[string]*Client),
+		broadcast:      make(chan ChatMessage),
+		register:       make(chan *Client),
+		unregister:     make(chan *Client),
+		requests:       make(chan Request),
+		messageHistory: NewMessageHistory(),
+	}
 	go hub.Run()
 
 	listener, err := net.Listen("tcp", port)
