@@ -289,13 +289,15 @@ func setupSignalHandling() chan os.Signal {
 func main() {
 	cfg := &Config{logger: setupLogging(""), serverStats: &ServerStats{}}
 
-	err := StartEchoServer(cfg, ":8081")
+	ctx, _ := context.WithCancel(context.Background())
+
+	err := StartEchoServer(ctx, cfg, ":8081")
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-func StartEchoServer(cfg *Config, port string) error {
+func StartEchoServer(ctx context.Context, cfg *Config, port string) error {
 	hub := Hub{
 		clients:        make(map[string]*Client),
 		broadcast:      make(chan ChatMessage),
@@ -307,7 +309,7 @@ func StartEchoServer(cfg *Config, port string) error {
 	}
 	go hub.Run()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	sigChan := setupSignalHandling()
 
 	go func() {
