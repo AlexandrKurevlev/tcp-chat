@@ -2,13 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -170,6 +173,20 @@ func (h *Hub) HandleCommand(client *Client, command string) {
 	}
 }
 
+func (h *Hub) Shutdown(ctx context.Context) error {
+	h.cfg.logger.Println("Server is shutting down")
+	<-ctx.Done()
+
+	h.broadcast <- ChatMessage{Timestamp: time.Now(), Content: "Server is shutting down", MessageType: "system"}
+	close(h.broadcast)
+	for _, client := range h.clients {
+		h.unregister <- client
+		client.Conn.Close()
+	}
+
+	return nil
+}
+
 func (h *Hub) setupClientConnection(conn net.Conn) *Client {
 	client := Client{ID: GenerateClientID(), Conn: conn, JoinTime: time.Now()}
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -263,8 +280,15 @@ type Config struct {
 	serverStats *ServerStats
 }
 
+func setupSignalHandling() chan os.Signal {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	return c
+}
+
 func main() {
 	cfg := &Config{logger: setupLogging(""), serverStats: &ServerStats{}}
+
 	err := StartEchoServer(cfg, ":8081")
 	if err != nil {
 		fmt.Println(err)
@@ -282,6 +306,16 @@ func StartEchoServer(cfg *Config, port string) error {
 		cfg:            cfg,
 	}
 	go hub.Run()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sigChan := setupSignalHandling()
+
+	go func() {
+		<-sigChan
+		cancel()
+		hub.Shutdown(ctx)
+		os.Exit(0)
+	}()
 
 	listener, err := net.Listen("tcp", port)
 	if err != nil {
