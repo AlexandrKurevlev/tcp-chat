@@ -42,6 +42,12 @@ type Client struct {
 }
 
 func handleClient(conn net.Conn, h *Hub) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.cfg.logger.Printf("recovered: %v", r)
+		}
+	}()
+
 	client := h.setupClientConnection(conn)
 	h.register <- client
 
