@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -266,10 +268,20 @@ func (mh *MessageHistory) GetRecent() []ChatMessage {
 }
 
 type ServerStats struct {
-	ActiveConnections      int
-	TotalMessagesProcessed int64
-	UptimeSeconds          int64
-	ErrorCount             int
+	ActiveConnections      int   `json:"active_connections"`
+	TotalMessagesProcessed int64 `json:"total_messages_processed"`
+	UptimeSeconds          int64 `json:"uptime_seconds"`
+	ErrorCount             int   `json:"error_count"`
+}
+
+type ServerHealth struct {
+	Status            string `json:"status"`
+	ActiveConnections int    `json:"active_connections"`
+	UptimeSeconds     int64  `json:"uptime_seconds"`
+}
+
+func getServerHealth(serverStats ServerStats) ServerHealth {
+	return ServerHealth{Status: "healthy", ActiveConnections: serverStats.ActiveConnections, UptimeSeconds: serverStats.UptimeSeconds}
 }
 
 func setupLogging(level string) *log.Logger {
@@ -339,6 +351,8 @@ func StartEchoServer(ctx context.Context, cfg *Config, serverCfg ServerConfig) e
 	}
 	go hub.Run()
 
+	startHTTPMonitoring(&hub, ":9090")
+
 	ctx, cancel := context.WithCancel(ctx)
 	sigChan := setupSignalHandling()
 
@@ -367,4 +381,27 @@ func StartEchoServer(ctx context.Context, cfg *Config, serverCfg ServerConfig) e
 	}
 
 	return nil
+}
+
+func startHTTPMonitoring(hub *Hub, port string) {
+	http.HandleFunc("/health", handleHealthEndpoint(hub))
+	http.HandleFunc("/stats", handleStatsEndpoint(hub))
+
+	go http.ListenAndServe(port, nil)
+}
+
+func handleHealthEndpoint(hub *Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(getServerHealth(*hub.cfg.serverStats))
+	}
+}
+
+func handleStatsEndpoint(hub *Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(hub.cfg.serverStats)
+	}
 }
